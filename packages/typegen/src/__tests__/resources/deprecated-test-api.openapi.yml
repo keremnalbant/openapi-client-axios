@@ -1,0 +1,78 @@
+openapi: 3.0.0
+info:
+  title: Example API with Deprecated Elements
+  description: Example API that includes deprecated endpoints and schemas
+  version: 1.0.0
+paths:
+  /pets/v1:
+    get:
+      deprecated: true
+      operationId: getPetsV1
+      summary: List pets (Deprecated)
+      description: Returns all pets in database - use v2 endpoint instead
+      responses:
+        '200':
+          description: List of pets in database
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PetV1'
+components:
+  schemas:
+    PetV1:
+      deprecated: true
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+    PetV2:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+        legacyDetails:
+          deprecated: true
+          description: Use the new 'details' field instead
+          type: object
+          properties:
+            color:
+              type: string
+            weight:
+              type: string
+        details:
+          type: object
+          properties:
+            color:
+              type: string
+            weight:
+              type: string
+            breed:
+              type: string
+        status:
+          deprecated: true
+          description: Use 'healthStatus' field instead
+          type: string
+        healthStatus:
+          type: string
+    PagingV1:
+      deprecated: true
+      description: Use the new 'PagingV2' type which includes cursor-based pagination
+      type: object
+      properties:
+        offset:
+          type: integer
+        limit:
+          type: integer
+    PagingV2:
+      type: object
+      properties:
+        cursor:
+          type: string
+        limit:
+          type: integer

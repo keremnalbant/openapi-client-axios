@@ -107,8 +107,28 @@ export async function generateTypesForDocument(definition: Document | string, op
 
   const normalizedSchema = normalizeSchema(rootSchema as Document);
 
-  const schema = parseSchema(normalizedSchema as JsonSchema);
+  // Add JSDoc comments for deprecated schemas
+  const addDeprecatedComment = (schema: any) => {
+    if (schema.deprecated) {
+      // Add JSDoc comment as description
+      schema.description = schema.description 
+        ? `@deprecated\n\n${schema.description}`
+        : '@deprecated';
+    }
+    // Handle nested objects and arrays
+    if (schema.properties) {
+      Object.values(schema.properties).forEach(prop => addDeprecatedComment(prop));
+    }
+    if (schema.items) {
+      addDeprecatedComment(schema.items);
+    }
+  };
 
+  if (normalizedSchema.components?.schemas) {
+    Object.values(normalizedSchema.components.schemas).forEach(addDeprecatedComment);
+  }
+
+  const schema = parseSchema(normalizedSchema as JsonSchema);
   const generator = new DTSGenerator([schema]);
 
   const schemaTypes = await generator.generate();
@@ -142,7 +162,7 @@ function generateMethodForOperation(
   exportTypes: ExportedType[],
   opts: TypegenOptions,
 ) {
-  const { operationId, summary, description } = operation;
+  const { operationId, summary, description, deprecated } = operation;
 
   // parameters arg
   const normalizedOperationId = convertKeyToTypeName(operationId);
@@ -194,13 +214,21 @@ function generateMethodForOperation(
     .join(',\n')}  \n): ${returnType}`;
 
   // comment for type
+  const comments = [];
+  if (deprecated) {
+    comments.push('@deprecated');
+  }
   const content = _.filter([summary, description]).join('\n\n');
+  if (content) {
+    comments.push(operationId + (content ? ` - ${content}` : ''));
+  }
+  
   const comment =
     '/**\n' +
-    indent(content === '' ? operationId : `${operationId} - ${content}`, 1, {
+    comments.map(c => indent(c, 1, {
       indent: ' * ',
       includeEmptyLines: true,
-    }) +
+    })).join('\n') +
     '\n */';
 
   return [comment, operationMethod].join('\n');
