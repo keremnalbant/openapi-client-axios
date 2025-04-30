@@ -1,7 +1,8 @@
 import _ from 'lodash';
 import yargs from 'yargs';
 import indent from 'indent-string';
-import OpenAPIClientAxios, { Document, HttpMethod, Operation } from 'openapi-client-axios';
+import OpenAPIClientAxios, { Document, HttpMethod, Operation, SchemaObject } from 'openapi-client-axios';
+import { OpenAPIV3 } from 'openapi-types';
 import DTSGenerator from '@anttiviljami/dtsgenerator/dist/core/dtsGenerator';
 import { JsonSchema, parseSchema } from '@anttiviljami/dtsgenerator';
 import RefParser from '@apidevtools/json-schema-ref-parser';
@@ -107,8 +108,28 @@ export async function generateTypesForDocument(definition: Document | string, op
 
   const normalizedSchema = normalizeSchema(rootSchema as Document);
 
-  const schema = parseSchema(normalizedSchema as JsonSchema);
+  // Add JSDoc comments for deprecated schemas
+  const addDeprecatedComment = (schema: OpenAPIV3.SchemaObject) => {
+    if ('deprecated' in schema && schema.deprecated) {
+      // Add JSDoc comment as description
+      schema.description = schema.description 
+        ? `@deprecated\n\n${schema.description}`
+        : '@deprecated';
+    }
+    // Handle nested objects and arrays
+    if (schema.properties) {
+      Object.values(schema.properties).forEach(prop => addDeprecatedComment(prop));
+    }
+    if (schema.items) {
+      addDeprecatedComment(schema.items);
+    }
+  };
 
+  if (normalizedSchema.components?.schemas) {
+    Object.values(normalizedSchema.components.schemas).forEach(addDeprecatedComment);
+  }
+
+  const schema = parseSchema(normalizedSchema as JsonSchema);
   const generator = new DTSGenerator([schema]);
 
   const schemaTypes = await generator.generate();
@@ -142,7 +163,7 @@ function generateMethodForOperation(
   exportTypes: ExportedType[],
   opts: TypegenOptions,
 ) {
-  const { operationId, summary, description } = operation;
+  const { operationId, summary, description, deprecated } = operation;
 
   // parameters arg
   const normalizedOperationId = convertKeyToTypeName(operationId);
@@ -178,14 +199,14 @@ function generateMethodForOperation(
 
   // payload arg
   const requestBodyType = _.find(exportTypes, { schemaRef: `#/paths/${normalizedOperationId}/requestBody` });
-  const dataArg = `data?: ${requestBodyType ? requestBodyType.path : 'any'}`;
+  const dataArg = `data?: ${requestBodyType ? requestBodyType.path : 'Record<string, never>'}`;
 
   // return type
   const responseTypePaths = _.chain(exportTypes)
     .filter(({ schemaRef }) => schemaRef.startsWith(`#/paths/${normalizedOperationId}/responses/2`))
     .map(({ path }) => path)
     .value();
-  const responseType = !_.isEmpty(responseTypePaths) ? responseTypePaths.join(' | ') : 'any';
+  const responseType = !_.isEmpty(responseTypePaths) ? responseTypePaths.join(' | ') : 'Record<string, never>';
   const returnType = `OperationResponse<${responseType}>`;
 
   const operationArgs = [parametersArg, dataArg, 'config?: AxiosRequestConfig'];
@@ -194,13 +215,21 @@ function generateMethodForOperation(
     .join(',\n')}  \n): ${returnType}`;
 
   // comment for type
+  const comments = [];
+  if (deprecated) {
+    comments.push('@deprecated');
+  }
   const content = _.filter([summary, description]).join('\n\n');
+  if (content) {
+    comments.push(operationId + (content ? ` - ${content}` : ''));
+  }
+  
   const comment =
     '/**\n' +
-    indent(content === '' ? operationId : `${operationId} - ${content}`, 1, {
+    comments.map(c => indent(c, 1, {
       indent: ' * ',
       includeEmptyLines: true,
-    }) +
+    })).join('\n') +
     '\n */';
 
   return [comment, operationMethod].join('\n');
@@ -268,14 +297,17 @@ const normalizeSchema = (schema: Document): Document => {
   // dtsgenerator doesn't generate parameters correctly if they are $refs to Parameter Objects
   // so we resolve them here
   for (const path in clonedSchema.paths ?? {}) {
-    const pathItem = clonedSchema.paths[path];
+    const pathItem = clonedSchema.paths[path] as OpenAPIV3.PathItemObject;
     for (const method in pathItem) {
-      const operation = pathItem[method as HttpMethod];
+      if (!Object.values(HttpMethod).includes(method as HttpMethod)) {
+        continue;
+      }
+      const operation = pathItem[method as HttpMethod] as OpenAPIV3.OperationObject;
       if (operation.parameters) {
         operation.parameters = operation.parameters.map((parameter) => {
           if ('$ref' in parameter) {
             const refPath = parameter.$ref.replace('#/', '').replace(/\//g, '.');
-            const resolvedParameter = _.get(clonedSchema, refPath);
+            const resolvedParameter = _.get(clonedSchema, refPath) as OpenAPIV3.ParameterObject;
             return resolvedParameter ?? parameter;
           }
           return parameter;
