@@ -1,7 +1,8 @@
 import _ from 'lodash';
 import yargs from 'yargs';
 import indent from 'indent-string';
-import OpenAPIClientAxios, { Document, HttpMethod, Operation } from 'openapi-client-axios';
+import OpenAPIClientAxios, { Document, HttpMethod, Operation, SchemaObject } from 'openapi-client-axios';
+import { OpenAPIV3 } from 'openapi-types';
 import DTSGenerator from '@anttiviljami/dtsgenerator/dist/core/dtsGenerator';
 import { JsonSchema, parseSchema } from '@anttiviljami/dtsgenerator';
 import RefParser from '@apidevtools/json-schema-ref-parser';
@@ -108,8 +109,8 @@ export async function generateTypesForDocument(definition: Document | string, op
   const normalizedSchema = normalizeSchema(rootSchema as Document);
 
   // Add JSDoc comments for deprecated schemas
-  const addDeprecatedComment = (schema: any) => {
-    if (schema.deprecated) {
+  const addDeprecatedComment = (schema: OpenAPIV3.SchemaObject) => {
+    if ('deprecated' in schema && schema.deprecated) {
       // Add JSDoc comment as description
       schema.description = schema.description 
         ? `@deprecated\n\n${schema.description}`
@@ -198,14 +199,14 @@ function generateMethodForOperation(
 
   // payload arg
   const requestBodyType = _.find(exportTypes, { schemaRef: `#/paths/${normalizedOperationId}/requestBody` });
-  const dataArg = `data?: ${requestBodyType ? requestBodyType.path : 'any'}`;
+  const dataArg = `data?: ${requestBodyType ? requestBodyType.path : 'Record<string, never>'}`;
 
   // return type
   const responseTypePaths = _.chain(exportTypes)
     .filter(({ schemaRef }) => schemaRef.startsWith(`#/paths/${normalizedOperationId}/responses/2`))
     .map(({ path }) => path)
     .value();
-  const responseType = !_.isEmpty(responseTypePaths) ? responseTypePaths.join(' | ') : 'any';
+  const responseType = !_.isEmpty(responseTypePaths) ? responseTypePaths.join(' | ') : 'Record<string, never>';
   const returnType = `OperationResponse<${responseType}>`;
 
   const operationArgs = [parametersArg, dataArg, 'config?: AxiosRequestConfig'];
@@ -296,14 +297,17 @@ const normalizeSchema = (schema: Document): Document => {
   // dtsgenerator doesn't generate parameters correctly if they are $refs to Parameter Objects
   // so we resolve them here
   for (const path in clonedSchema.paths ?? {}) {
-    const pathItem = clonedSchema.paths[path];
+    const pathItem = clonedSchema.paths[path] as OpenAPIV3.PathItemObject;
     for (const method in pathItem) {
-      const operation = pathItem[method as HttpMethod];
+      if (!Object.values(HttpMethod).includes(method as HttpMethod)) {
+        continue;
+      }
+      const operation = pathItem[method as HttpMethod] as OpenAPIV3.OperationObject;
       if (operation.parameters) {
         operation.parameters = operation.parameters.map((parameter) => {
           if ('$ref' in parameter) {
             const refPath = parameter.$ref.replace('#/', '').replace(/\//g, '.');
-            const resolvedParameter = _.get(clonedSchema, refPath);
+            const resolvedParameter = _.get(clonedSchema, refPath) as OpenAPIV3.ParameterObject;
             return resolvedParameter ?? parameter;
           }
           return parameter;
